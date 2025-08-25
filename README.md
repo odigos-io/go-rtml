@@ -15,8 +15,13 @@ import (
 	rtml "github.com/odigos-io/go-rtml"
 )
 
-func main() {
-	rtml.SetMemoryLimit(1024 * 1024 * 1024)
+func requestHandler() {
+    if rtml.IsMemLimitReached() {
+        return errResourceExhausted, "Memory limit reached"
+    }
+
+    // process request, which might be be allocation heavy.
+    return nil // success, no memory limit to back-pressure.
 }
 ```
 
