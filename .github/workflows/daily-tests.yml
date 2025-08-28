@@ -65,7 +65,7 @@ jobs:
       working-directory: testframework
       run: |
         chmod +x build-docker.sh
-        ./build-docker.sh
+        ./build-docker.sh ${{ matrix.go-version }}
         
     - name: Run test suite
       working-directory: testframework
