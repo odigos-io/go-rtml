@@ -1,0 +1,82 @@
+name: Daily Tests
+
+on:
+  schedule:
+    # Run at 2:00 AM UTC every day
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+        
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Install dependencies
+      working-directory: testframework
+      run: |
+        go mod download
+        go mod tidy
+        
+    - name: Build test binaries
+      working-directory: testframework
+      run: |
+        mkdir -p bin
+        go build -ldflags="-checklinkname=0" -o bin/test-runner ./test-runner
+        go build -o bin/test-framework ./test-framework
+        
+    - name: Build Docker image
+      working-directory: testframework
+      run: |
+        chmod +x build-docker.sh
+        ./build-docker.sh
+        
+    - name: Run test suite
+      working-directory: testframework
+      run: |
+        mkdir -p test-results
+        ./bin/test-framework
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results-${{ github.run_id }}
+        path: testframework/test-results/
+        retention-days: 30
+        
+    - name: Check test results
+      working-directory: testframework
+      run: |
+        if [ -f test-results/test-report.json ]; then
+          echo "Test report generated successfully"
+          # Count failed tests
+          failed_count=$(jq '[.[] | select(.status == "failed")] | length' test-results/test-report.json)
+          timeout_count=$(jq '[.[] | select(.status == "timeout")] | length' test-results/test-report.json)
+          total_count=$(jq 'length' test-results/test-report.json)
+          
+          echo "Test Summary:"
+          echo "Total tests: $total_count"
+          echo "Failed tests: $failed_count"
+          echo "Timeout tests: $timeout_count"
+          
+          if [ "$failed_count" -gt 0 ] || [ "$timeout_count" -gt 0 ]; then
+            echo "❌ Some tests failed or timed out"
+            exit 1
+          else
+            echo "✅ All tests passed"
+          fi
+        else
+          echo "❌ No test report found"
+          exit 1
+        fi
