@@ -7,17 +7,37 @@ on:
   workflow_dispatch: # Allow manual triggering
 
 jobs:
-  run-tests:
+  get-go-versions:
     runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.get-versions.outputs.versions }}
+    steps:
+      - name: Get Go versions
+        id: get-versions
+        run: |
+          # Get all Go versions 1.23 and above
+          versions=$(curl -s "https://go.dev/dl/?mode=json&include=all" \
+            | jq -r '.[] | select(.stable == true) | .version' \
+            | grep -E '^go1\.(2[3-9]|[3-9][0-9])' \
+            | jq -R -s -c 'split("\n")[:-1]')
+          echo "versions=$versions" >> $GITHUB_OUTPUT
+
+  run-tests:
+    needs: get-go-versions
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ${{ fromJson(needs.get-go-versions.outputs.versions) }}
+      fail-fast: false
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Set up Go
+    - name: Set up Go ${{ matrix.go-version }}
       uses: actions/setup-go@v4
       with:
-        go-version: '1.24'
+        go-version: ${{ matrix.go-version }}
         
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -51,13 +71,14 @@ jobs:
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: test-results-${{ github.run_id }}
+        name: test-results-${{ matrix.go-version }}-${{ github.run_id }}
         path: testframework/test-results/
         retention-days: 30
         
     - name: Check test results
       working-directory: testframework
       run: |
+        echo "Running tests with Go version: ${{ matrix.go-version }}"
         if [ -f test-results/test-report.json ]; then
           echo "Test report generated successfully"
           # Count failed tests
@@ -65,18 +86,18 @@ jobs:
           timeout_count=$(jq '[.[] | select(.status == "timeout")] | length' test-results/test-report.json)
           total_count=$(jq 'length' test-results/test-report.json)
           
-          echo "Test Summary:"
+          echo "Test Summary for Go ${{ matrix.go-version }}:"
           echo "Total tests: $total_count"
           echo "Failed tests: $failed_count"
           echo "Timeout tests: $timeout_count"
           
           if [ "$failed_count" -gt 0 ] || [ "$timeout_count" -gt 0 ]; then
-            echo "❌ Some tests failed or timed out"
+            echo "❌ Some tests failed or timed out with Go ${{ matrix.go-version }}"
             exit 1
           else
-            echo "✅ All tests passed"
+            echo "✅ All tests passed with Go ${{ matrix.go-version }}"
           fi
         else
-          echo "❌ No test report found"
+          echo "❌ No test report found for Go ${{ matrix.go-version }}"
           exit 1
         fi
