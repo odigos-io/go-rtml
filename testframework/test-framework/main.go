@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -27,6 +29,12 @@ type TestResult struct {
 		PeakMemoryMB  float64 `json:"peak_memory_mb"`
 		FinalMemoryMB float64 `json:"final_memory_mb"`
 	} `json:"memory_stats"`
+	FailureDetails struct {
+		Reason        string `json:"reason,omitempty"`
+		ExpectedValue string `json:"expected_value,omitempty"`
+		ActualValue   string `json:"actual_value,omitempty"`
+		LogSnippet    string `json:"log_snippet,omitempty"`
+	} `json:"failure_details,omitempty"`
 }
 
 type TestConfig struct {
@@ -84,6 +92,8 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 		result.Status = "failed"
 		result.Error = fmt.Sprintf("failed to create container: %v", err)
 		result.EndTime = time.Now()
+		result.FailureDetails.Reason = "Container creation failed"
+		result.FailureDetails.ActualValue = err.Error()
 		return result
 	}
 
@@ -98,6 +108,8 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 		result.Status = "failed"
 		result.Error = fmt.Sprintf("failed to start container: %v", err)
 		result.EndTime = time.Now()
+		result.FailureDetails.Reason = "Container start failed"
+		result.FailureDetails.ActualValue = err.Error()
 		return result
 	}
 
@@ -176,16 +188,19 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 		result.EndTime = time.Now()
 		result.Duration = result.EndTime.Sub(result.StartTime).Seconds()
 
-		// Get container logs
+		// Get container logs with better error handling
 		logs, err := tr.dockerClient.ContainerLogs(ctx, containerID, types.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
 		if err == nil {
 			defer logs.Close()
-			// Read logs (simplified - in production you'd want to handle this more robustly)
-			buf := make([]byte, 4096)
-			n, _ := logs.Read(buf)
-			if n > 0 {
-				result.Logs = string(buf[:n])
+			// Read logs more robustly
+			logContent, err := io.ReadAll(logs)
+			if err == nil {
+				result.Logs = string(logContent)
+			} else {
+				result.Logs = fmt.Sprintf("Failed to read logs: %v", err)
 			}
+		} else {
+			result.Logs = fmt.Sprintf("Failed to get logs: %v", err)
 		}
 
 		// Set collected memory stats
@@ -199,24 +214,48 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 				config.Name, result.MemoryStats.PeakMemoryMB, result.MemoryStats.FinalMemoryMB)
 		}
 
-		// Determine test status
+		// Determine test status with detailed error information
 		if result.ExitCode == config.ExpectedExitCode {
 			result.Status = "passed"
 		} else {
 			result.Status = "failed"
 			result.Error = fmt.Sprintf("expected exit code %d, got %d", config.ExpectedExitCode, result.ExitCode)
+			result.FailureDetails.Reason = "Unexpected exit code"
+			result.FailureDetails.ExpectedValue = fmt.Sprintf("%d", config.ExpectedExitCode)
+			result.FailureDetails.ActualValue = fmt.Sprintf("%d", result.ExitCode)
+			
+			// Extract relevant log snippet for debugging
+			if result.Logs != "" {
+				result.FailureDetails.LogSnippet = tr.extractRelevantLogSnippet(result.Logs)
+			}
 		}
 
 	case err := <-errCh:
 		result.Status = "failed"
 		result.Error = fmt.Sprintf("container wait error: %v", err)
 		result.EndTime = time.Now()
+		result.FailureDetails.Reason = "Container wait failed"
+		result.FailureDetails.ActualValue = err.Error()
 
 	case <-waitCtx.Done():
 		result.Status = "timeout"
 		result.Error = "test timed out"
 		result.EndTime = time.Now()
 		result.Duration = timeout.Seconds()
+		result.FailureDetails.Reason = "Test exceeded timeout"
+		result.FailureDetails.ExpectedValue = fmt.Sprintf("%d seconds", config.TimeoutSeconds)
+		result.FailureDetails.ActualValue = fmt.Sprintf(">%d seconds", config.TimeoutSeconds)
+		
+		// Try to get logs even for timeout
+		logs, err := tr.dockerClient.ContainerLogs(ctx, containerID, types.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+		if err == nil {
+			defer logs.Close()
+			logContent, err := io.ReadAll(logs)
+			if err == nil {
+				result.Logs = string(logContent)
+				result.FailureDetails.LogSnippet = tr.extractRelevantLogSnippet(result.Logs)
+			}
+		}
 	}
 
 	log.Printf("Test %s completed with status: %s", config.Name, result.Status)
@@ -281,7 +320,7 @@ func (tr *TestRunner) GenerateReport() {
 		return
 	}
 
-	// Generate summary
+	// Generate detailed summary
 	passed := 0
 	failed := 0
 	timeout := 0
@@ -303,6 +342,99 @@ func (tr *TestRunner) GenerateReport() {
 	fmt.Printf("Failed: %d\n", failed)
 	fmt.Printf("Timeout: %d\n", timeout)
 	fmt.Printf("Report saved to: %s\n", reportPath)
+	
+	// Print detailed failure information
+	if failed > 0 || timeout > 0 {
+		fmt.Printf("\n=== Failure Details ===\n")
+		for _, result := range tr.results {
+			if result.Status != "passed" {
+				fmt.Printf("\n❌ Test: %s\n", result.TestName)
+				fmt.Printf("   Status: %s\n", result.Status)
+				fmt.Printf("   Duration: %.2f seconds\n", result.Duration)
+				fmt.Printf("   Exit Code: %d\n", result.ExitCode)
+				fmt.Printf("   Error: %s\n", result.Error)
+				
+				if result.FailureDetails.Reason != "" {
+					fmt.Printf("   Reason: %s\n", result.FailureDetails.Reason)
+					if result.FailureDetails.ExpectedValue != "" {
+						fmt.Printf("   Expected: %s\n", result.FailureDetails.ExpectedValue)
+					}
+					if result.FailureDetails.ActualValue != "" {
+						fmt.Printf("   Actual: %s\n", result.FailureDetails.ActualValue)
+					}
+				}
+				
+				if result.FailureDetails.LogSnippet != "" {
+					fmt.Printf("   Log Snippet:\n")
+					lines := strings.Split(result.FailureDetails.LogSnippet, "\n")
+					for _, line := range lines {
+						if strings.TrimSpace(line) != "" {
+							fmt.Printf("     %s\n", line)
+						}
+					}
+				}
+				
+				if result.MemoryStats.PeakMemoryMB > 0 {
+					fmt.Printf("   Peak Memory: %.2f MB\n", result.MemoryStats.PeakMemoryMB)
+				}
+			}
+		}
+	}
+	
+	// Print success information
+	if passed > 0 {
+		fmt.Printf("\n=== Success Details ===\n")
+		for _, result := range tr.results {
+			if result.Status == "passed" {
+				fmt.Printf("✅ Test: %s (%.2fs, Peak: %.2f MB)\n", 
+					result.TestName, result.Duration, result.MemoryStats.PeakMemoryMB)
+			}
+		}
+	}
+}
+
+// extractRelevantLogSnippet extracts the most relevant part of logs for debugging
+func (tr *TestRunner) extractRelevantLogSnippet(logs string) string {
+	if logs == "" {
+		return ""
+	}
+	
+	lines := strings.Split(logs, "\n")
+	
+	// Look for error indicators
+	errorKeywords := []string{"❌ FAIL", "ERROR", "FAIL", "panic", "fatal", "exit status"}
+	
+	for i, line := range lines {
+		for _, keyword := range errorKeywords {
+			if strings.Contains(strings.ToUpper(line), keyword) {
+				// Return the error line and a few lines before and after for context
+				start := max(0, i-2)
+				end := min(len(lines), i+3)
+				return strings.Join(lines[start:end], "\n")
+			}
+		}
+	}
+	
+	// If no error keywords found, return the last 10 lines
+	if len(lines) > 10 {
+		return strings.Join(lines[len(lines)-10:], "\n")
+	}
+	
+	return logs
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func main() {
