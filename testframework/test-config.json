@@ -1,0 +1,60 @@
+{
+  "tests": [
+    {
+      "name": "basic-memory-allocation",
+      "image": "go-rtml-test:latest",
+      "memory_limit": "256M",
+      "timeout_seconds": 30,
+      "expected_exit_code": 0,
+      "env_vars": {
+        "TEST_TYPE": "memory_allocation",
+        "ALLOC_SIZE_MB": "50",
+        "ALLOC_DURATION_SEC": "5"
+      }
+    },
+    {
+      "name": "memory-limit-enforcement",
+      "image": "go-rtml-test:latest",
+      "memory_limit": "128M",
+      "timeout_seconds": 60,
+      "expected_exit_code": 1,
+      "env_vars": {
+        "TEST_TYPE": "memory_limit",
+        "ALLOC_SIZE_MB": "200",
+        "ALLOC_DURATION_SEC": "10"
+      }
+    },
+    {
+      "name": "stress-test-short",
+      "image": "go-rtml-test:latest",
+      "memory_limit": "512M",
+      "timeout_seconds": 60,
+      "expected_exit_code": 0,
+      "env_vars": {
+        "TEST_TYPE": "stress",
+        "ALLOC_SIZE_MB": "25",
+        "ALLOC_DURATION_SEC": "15",
+        "GC_FREQUENCY_MS": "200"
+      }
+    },
+    {
+      "name": "stress-test-long",
+      "image": "go-rtml-test:latest",
+      "memory_limit": "1G",
+      "timeout_seconds": 300,
+      "expected_exit_code": 0,
+      "env_vars": {
+        "TEST_TYPE": "stress",
+        "ALLOC_SIZE_MB": "100",
+        "ALLOC_DURATION_SEC": "60",
+        "GC_FREQUENCY_MS": "100"
+      }
+    }
+  ],
+  "global_settings": {
+    "parallel_execution": false,
+    "retry_failed_tests": false,
+    "max_retries": 3,
+    "log_level": "info"
+  }
+}

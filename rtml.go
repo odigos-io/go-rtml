@@ -1,6 +1,9 @@
 package rtml
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+	_ "unsafe"
+)
 
 // miror the types from go runtime which uses sysMemStat.
 // https://github.com/golang/go/blob/44c5956bf7454ca178c596eb87578ea61d6c9dee/src/runtime/mstats.go#L643

@@ -2,9 +2,24 @@
 
 golang real time memory limiter to guard against OOM in go code.
 
-This package is all about the STABILITY OF YOUR APPLICATION AND THE SYSTEM IT RUNS ON.
+This package is all about the STABILITY of your go application under memory pressure.
 
-Your golang applications need memory (RAM) to run. In an utopic world, you would have infinite memory and never need to think or worry about how much resources you are consuming. In the real world, memory is a limited resource which has to be managed carefully.
+## Motivation
+
+Your golang applications need memory (RAM) to run. In an utopic world, you would have infinite memory and never need to think or worry about how much memory resources are consumed. In the real world, memory is a limited resource which has to be managed carefully.
+
+When your process is under memory pressure for any reason, you - the application developer, is responsible to react be applying back-pressure and avoid processing new work items which can increase the memory pressure and lead to OutOfMemory brutal termination of the process.
+
+## How it works
+
+- Call `rtml.IsMemLimitReached()` in the entry points to your application
+- Do it where you have the ability to reject, drop, or apply back-pressure to your senders.
+- Prefer to call it as soon as possible, before any expensive allocations are made.
+
+This simple function will tell you if the memory limit is reached and allow you to react, for example: 
+- apply back-pressure to the sender by rejecting the work item. it is expected to be retried after some time (where hopefully, memory pressure has already reduced to normal levels).
+- drop the work item if the system cannot handle it under the current memory pressure.
+- notify some monitoring system about this event for further investigation or automatic scaling.
 
 ## Usage
 
@@ -24,6 +39,43 @@ func requestHandler() {
     return nil // success, no memory limit to back-pressure.
 }
 ```
+
+and build your application with the following ldflag: "-checklinkname=0".
+
+## Testing
+
+This project includes a comprehensive test framework that runs tests in isolated containers to verify memory limit behavior. The test framework is located in the `testframework/` directory as a separate Go module.
+
+### Quick Test Run
+
+```bash
+# Navigate to test framework directory
+cd testframework
+
+# Run the complete test suite
+./scripts/run-tests.sh
+
+# Or use make
+make docker-run-tests
+```
+
+### Test Types
+
+- **Memory Allocation Tests**: Verify basic memory allocation within limits
+- **Memory Limit Tests**: Ensure memory limits are properly enforced
+- **Stress Tests**: Test memory management under sustained load
+
+For detailed documentation, see [testframework/README.md](testframework/README.md).
+
+## About ldflags="-checklinkname=0"
+
+This package uses `go:linkname` to access the internal state of the go runtime.
+
+This is considered bad practice and not recommended by the go team, thus the ldflag to warn you.
+
+Having said that, it does address a hard to solve real-world problem, in a way that satisfies tight performance requirements and acurate reaction to memory pressure.
+
+Be aware that this practice, while working, can break unexpectedly by internal changes to the go runtime implementation without notice. Test your application with every new go version, weight the benefits, risks and alternatives, and evaluate if this risk is acceptable for you.
 
 ## What is Memory Limit?
 
