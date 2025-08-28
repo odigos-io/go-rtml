@@ -19,8 +19,14 @@ jobs:
           versions=$(curl -s "https://go.dev/dl/?mode=json&include=all" \
             | jq -r '.[] | select(.stable == true) | .version' \
             | grep -E '^go1\.(2[3-9]|[3-9][0-9])' \
+            | sed 's/^go//' \
             | jq -R -s -c 'split("\n")[:-1]')
           echo "versions=$versions" >> $GITHUB_OUTPUT
+          
+      - name: Print Go versions
+        run: |
+          echo "Found Go versions:"
+          echo '${{ steps.get-versions.outputs.versions }}' | jq -r '.[]'
 
   run-tests:
     needs: get-go-versions
@@ -35,7 +41,7 @@ jobs:
       uses: actions/checkout@v4
       
     - name: Set up Go ${{ matrix.go-version }}
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: ${{ matrix.go-version }}
         
