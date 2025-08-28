@@ -10,6 +10,8 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Function to print colored output
@@ -27,6 +29,14 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_debug() {
+    echo -e "${PURPLE}[DEBUG]${NC} $1"
+}
+
+print_test() {
+    echo -e "${CYAN}[TEST]${NC} $1"
 }
 
 # Check prerequisites
@@ -55,6 +65,7 @@ check_prerequisites() {
     fi
     
     print_success "Prerequisites check passed"
+    print_debug "Using Go version: $GO_VERSION"
 }
 
 # Install dependencies
@@ -74,20 +85,41 @@ build_binaries() {
     
     # Build test framework
     print_status "Building test framework..."
-    go build -o bin/test-framework ./cmd/test-framework
+    if go build -o bin/test-framework ./test-framework; then
+        print_success "Test framework built successfully"
+    else
+        print_error "Failed to build test framework"
+        exit 1
+    fi
     
     # Build test runner
     print_status "Building test runner..."
-    go build -ldflags="-checklinkname=0" -o bin/test-runner ./cmd/test-runner
+    if go build -ldflags="-checklinkname=0" -o bin/test-runner ./test-runner; then
+        print_success "Test runner built successfully"
+    else
+        print_error "Failed to build test runner"
+        exit 1
+    fi
     
-    print_success "Binaries built successfully"
+    print_success "All binaries built successfully"
 }
 
 # Build Docker image
 build_docker_image() {
     print_status "Building Docker image..."
-    docker build -t go-rtml-test:latest .
-    print_success "Docker image built successfully"
+    
+    # Check if Dockerfile exists
+    if [ ! -f "Dockerfile" ]; then
+        print_error "Dockerfile not found in current directory"
+        exit 1
+    fi
+    
+    if docker build -t go-rtml-test:latest .; then
+        print_success "Docker image built successfully"
+    else
+        print_error "Failed to build Docker image"
+        exit 1
+    fi
 }
 
 # Run tests
@@ -97,19 +129,27 @@ run_tests() {
     # Create results directory
     mkdir -p test-results
     
-    # Run the test framework
-    ./bin/test-framework
+    # Run the test framework and capture output
+    print_test "Executing test framework..."
+    if ./bin/test-framework; then
+        print_success "Test framework executed successfully"
+    else
+        print_error "Test framework execution failed"
+        # Don't exit here, let's see what results we got
+    fi
     
     print_success "Test suite completed"
 }
 
-# Show results
+# Show results with enhanced error reporting
 show_results() {
-    print_status "Test results:"
+    print_status "Analyzing test results..."
     
     if [ -f "test-results/test-report.json" ]; then
         echo ""
-        echo "=== Test Results Summary ==="
+        echo "=========================================="
+        echo "           TEST RESULTS SUMMARY"
+        echo "=========================================="
         
         # Count test results using jq if available, otherwise use grep
         if command -v jq >/dev/null 2>&1; then
@@ -129,9 +169,72 @@ show_results() {
         echo "Failed: $FAILED"
         echo "Timeout: $TIMEOUT"
         echo ""
+        
+        # Show detailed results
+        if [ "$FAILED" -gt 0 ] || [ "$TIMEOUT" -gt 0 ]; then
+            echo "=========================================="
+            echo "           FAILURE DETAILS"
+            echo "=========================================="
+            
+            if command -v jq >/dev/null 2>&1; then
+                # Use jq to extract detailed failure information
+                jq -r '.[] | select(.status != "passed") | 
+                    "❌ Test: " + .test_name + "\n" +
+                    "   Status: " + .status + "\n" +
+                    "   Duration: " + (.duration_seconds | tostring) + " seconds\n" +
+                    "   Exit Code: " + (.exit_code | tostring) + "\n" +
+                    "   Error: " + (.error // "N/A") + "\n" +
+                    (if .failure_details.reason then "   Reason: " + .failure_details.reason + "\n" else "" end) +
+                    (if .failure_details.expected_value then "   Expected: " + .failure_details.expected_value + "\n" else "" end) +
+                    (if .failure_details.actual_value then "   Actual: " + .failure_details.actual_value + "\n" else "" end) +
+                    (if .failure_details.log_snippet then "   Log Snippet:\n" + (.failure_details.log_snippet | split("\n") | map("     " + .) | join("\n")) + "\n" else "" end) +
+                    (if .memory_stats.peak_memory_mb > 0 then "   Peak Memory: " + (.memory_stats.peak_memory_mb | tostring) + " MB\n" else "" end) +
+                    "\n"' test-results/test-report.json
+            else
+                # Fallback to grep-based parsing
+                print_warning "jq not available, showing basic failure information"
+                grep -A 20 '"status": "failed"' test-results/test-report.json || true
+                grep -A 20 '"status": "timeout"' test-results/test-report.json || true
+            fi
+        fi
+        
+        # Show success details
+        if [ "$PASSED" -gt 0 ]; then
+            echo "=========================================="
+            echo "           SUCCESS DETAILS"
+            echo "=========================================="
+            
+            if command -v jq >/dev/null 2>&1; then
+                jq -r '.[] | select(.status == "passed") | 
+                    "✅ Test: " + .test_name + 
+                    " (" + (.duration_seconds | tostring) + "s, Peak: " + (.memory_stats.peak_memory_mb | tostring) + " MB)\n"' test-results/test-report.json
+            else
+                grep -A 5 '"status": "passed"' test-results/test-report.json || true
+            fi
+        fi
+        
+        echo ""
         echo "Detailed results saved to: test-results/test-report.json"
+        
+        # Determine overall success/failure
+        if [ "$FAILED" -eq 0 ] && [ "$TIMEOUT" -eq 0 ]; then
+            print_success "All tests passed! 🎉"
+            return 0
+        else
+            print_error "Some tests failed or timed out ❌"
+            echo ""
+            echo "Troubleshooting tips:"
+            echo "1. Check the detailed failure information above"
+            echo "2. Review the full logs in test-results/test-report.json"
+            echo "3. Verify Docker container memory limits are set correctly"
+            echo "4. Check if the RTML library is properly initialized"
+            echo "5. Ensure the test environment has sufficient resources"
+            return 1
+        fi
     else
         print_warning "No test results found"
+        print_error "Test execution may have failed completely"
+        return 1
     fi
 }
 
@@ -186,6 +289,10 @@ main() {
             echo "  build   - Build binaries and Docker image only"
             echo "  clean   - Clean up build artifacts"
             echo "  help    - Show this help message"
+            echo ""
+            echo "Environment:"
+            echo "  The script will automatically detect Go version and Docker availability."
+            echo "  Test results are saved to test-results/test-report.json"
             ;;
         *)
             print_error "Unknown command: $1"

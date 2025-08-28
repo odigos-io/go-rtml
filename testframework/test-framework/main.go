@@ -223,7 +223,7 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 			result.FailureDetails.Reason = "Unexpected exit code"
 			result.FailureDetails.ExpectedValue = fmt.Sprintf("%d", config.ExpectedExitCode)
 			result.FailureDetails.ActualValue = fmt.Sprintf("%d", result.ExitCode)
-			
+
 			// Extract relevant log snippet for debugging
 			if result.Logs != "" {
 				result.FailureDetails.LogSnippet = tr.extractRelevantLogSnippet(result.Logs)
@@ -245,7 +245,7 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 		result.FailureDetails.Reason = "Test exceeded timeout"
 		result.FailureDetails.ExpectedValue = fmt.Sprintf("%d seconds", config.TimeoutSeconds)
 		result.FailureDetails.ActualValue = fmt.Sprintf(">%d seconds", config.TimeoutSeconds)
-		
+
 		// Try to get logs even for timeout
 		logs, err := tr.dockerClient.ContainerLogs(ctx, containerID, types.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
 		if err == nil {
@@ -342,7 +342,7 @@ func (tr *TestRunner) GenerateReport() {
 	fmt.Printf("Failed: %d\n", failed)
 	fmt.Printf("Timeout: %d\n", timeout)
 	fmt.Printf("Report saved to: %s\n", reportPath)
-	
+
 	// Print detailed failure information
 	if failed > 0 || timeout > 0 {
 		fmt.Printf("\n=== Failure Details ===\n")
@@ -353,7 +353,7 @@ func (tr *TestRunner) GenerateReport() {
 				fmt.Printf("   Duration: %.2f seconds\n", result.Duration)
 				fmt.Printf("   Exit Code: %d\n", result.ExitCode)
 				fmt.Printf("   Error: %s\n", result.Error)
-				
+
 				if result.FailureDetails.Reason != "" {
 					fmt.Printf("   Reason: %s\n", result.FailureDetails.Reason)
 					if result.FailureDetails.ExpectedValue != "" {
@@ -363,7 +363,7 @@ func (tr *TestRunner) GenerateReport() {
 						fmt.Printf("   Actual: %s\n", result.FailureDetails.ActualValue)
 					}
 				}
-				
+
 				if result.FailureDetails.LogSnippet != "" {
 					fmt.Printf("   Log Snippet:\n")
 					lines := strings.Split(result.FailureDetails.LogSnippet, "\n")
@@ -373,20 +373,20 @@ func (tr *TestRunner) GenerateReport() {
 						}
 					}
 				}
-				
+
 				if result.MemoryStats.PeakMemoryMB > 0 {
 					fmt.Printf("   Peak Memory: %.2f MB\n", result.MemoryStats.PeakMemoryMB)
 				}
 			}
 		}
 	}
-	
+
 	// Print success information
 	if passed > 0 {
 		fmt.Printf("\n=== Success Details ===\n")
 		for _, result := range tr.results {
 			if result.Status == "passed" {
-				fmt.Printf("✅ Test: %s (%.2fs, Peak: %.2f MB)\n", 
+				fmt.Printf("✅ Test: %s (%.2fs, Peak: %.2f MB)\n",
 					result.TestName, result.Duration, result.MemoryStats.PeakMemoryMB)
 			}
 		}
@@ -398,12 +398,12 @@ func (tr *TestRunner) extractRelevantLogSnippet(logs string) string {
 	if logs == "" {
 		return ""
 	}
-	
+
 	lines := strings.Split(logs, "\n")
-	
+
 	// Look for error indicators
 	errorKeywords := []string{"❌ FAIL", "ERROR", "FAIL", "panic", "fatal", "exit status"}
-	
+
 	for i, line := range lines {
 		for _, keyword := range errorKeywords {
 			if strings.Contains(strings.ToUpper(line), keyword) {
@@ -414,12 +414,12 @@ func (tr *TestRunner) extractRelevantLogSnippet(logs string) string {
 			}
 		}
 	}
-	
+
 	// If no error keywords found, return the last 10 lines
 	if len(lines) > 10 {
 		return strings.Join(lines[len(lines)-10:], "\n")
 	}
-	
+
 	return logs
 }
 

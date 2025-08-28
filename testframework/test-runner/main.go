@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	rtml "github.com/odigos-io/go-rtml"
 )
@@ -19,16 +20,34 @@ type SanityTest struct {
 var globalChunks [][]byte
 
 func main() {
+	// Set up logging with timestamps
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	
 	// Parse environment variables
 	test := SanityTest{
 		allocSizeMB: getEnvAsIntOrDefault("ALLOC_SIZE_MB", 50),
 	}
 
-	log.Printf("Starting sanity check test")
+	log.Printf("=== Starting sanity check test ===")
+	log.Printf("Go version: %s", runtime.Version())
 	log.Printf("Allocation size: %d MB", test.allocSizeMB)
+	log.Printf("Available CPUs: %d", runtime.NumCPU())
+	log.Printf("Initial memory stats:")
+	
+	// Log initial memory stats
+	var initialMemStats runtime.MemStats
+	runtime.ReadMemStats(&initialMemStats)
+	log.Printf("  HeapAlloc: %d MB", initialMemStats.HeapAlloc/(1024*1024))
+	log.Printf("  HeapSys: %d MB", initialMemStats.HeapSys/(1024*1024))
+	log.Printf("  HeapIdle: %d MB", initialMemStats.HeapIdle/(1024*1024))
+	log.Printf("  HeapInuse: %d MB", initialMemStats.HeapInuse/(1024*1024))
 
 	// Run the sanity check test
+	startTime := time.Now()
 	runSanityCheckTest(test)
+	duration := time.Since(startTime)
+	
+	log.Printf("=== Test completed successfully in %v ===", duration)
 }
 
 func forceMemoryCommit(chunks [][]byte) {
@@ -85,11 +104,13 @@ func runSanityCheckTest(test SanityTest) {
 
 	// Get initial stats
 	initialStats := rtml.GetMemLimitRelatedStats()
-	log.Printf("Initial stats: MemoryLimit=%d MB, HeapGoal=%d MB, HeapLive=%d MB, MappedReady=%d MB",
-		initialStats.MemoryLimit/(1024*1024),
-		initialStats.HeapGoal/(1024*1024),
-		initialStats.HeapLive/(1024*1024),
-		initialStats.MappedReady/(1024*1024))
+	log.Printf("Initial RTML stats:")
+	log.Printf("  MemoryLimit: %d MB", initialStats.MemoryLimit/(1024*1024))
+	log.Printf("  HeapGoal: %d MB", initialStats.HeapGoal/(1024*1024))
+	log.Printf("  HeapLive: %d MB", initialStats.HeapLive/(1024*1024))
+	log.Printf("  MappedReady: %d MB", initialStats.MappedReady/(1024*1024))
+	log.Printf("  TotalAlloc: %d MB", initialStats.TotalAlloc/(1024*1024))
+	log.Printf("  TotalFree: %d MB", initialStats.TotalFree/(1024*1024))
 
 	// Allocate memory gradually
 	allocSizeBytes := test.allocSizeMB * 1024 * 1024
@@ -98,6 +119,7 @@ func runSanityCheckTest(test SanityTest) {
 
 	log.Printf("Allocating %d MB in %d KB chunks...", test.allocSizeMB, chunkSize/1024)
 
+	allocationStart := time.Now()
 	for i := 0; i < allocSizeBytes/chunkSize; i++ {
 		chunk := make([]byte, chunkSize)
 
@@ -143,7 +165,8 @@ func runSanityCheckTest(test SanityTest) {
 		}
 	}
 
-	log.Printf("Successfully allocated %d MB", test.allocSizeMB)
+	allocationDuration := time.Since(allocationStart)
+	log.Printf("Successfully allocated %d MB in %v", test.allocSizeMB, allocationDuration)
 
 	// Keep the chunks alive by doing some work with them
 	totalBytes := 0
@@ -172,44 +195,59 @@ func runSanityCheckTest(test SanityTest) {
 			foo += int(val)
 		}
 	}
+	log.Printf("Computed checksum across all chunks: %d", foo)
 
 	var finalMemStats runtime.MemStats
 	runtime.ReadMemStats(&finalMemStats)
-	log.Printf("Final runtime stats: HeapAlloc=%d MB, HeapSys=%d MB, HeapIdle=%d MB, HeapInuse=%d MB",
-		finalMemStats.HeapAlloc/(1024*1024), finalMemStats.HeapSys/(1024*1024),
-		finalMemStats.HeapIdle/(1024*1024), finalMemStats.HeapInuse/(1024*1024))
+	log.Printf("Final runtime stats:")
+	log.Printf("  HeapAlloc: %d MB", finalMemStats.HeapAlloc/(1024*1024))
+	log.Printf("  HeapSys: %d MB", finalMemStats.HeapSys/(1024*1024))
+	log.Printf("  HeapIdle: %d MB", finalMemStats.HeapIdle/(1024*1024))
+	log.Printf("  HeapInuse: %d MB", finalMemStats.HeapInuse/(1024*1024))
 
 	// Get final stats
 	finalStats := rtml.GetMemLimitRelatedStats()
-	log.Printf("Final stats: MemoryLimit=%d MB, HeapGoal=%d MB, HeapLive=%d MB, MappedReady=%d MB, TotalAlloc=%d MB, TotalFree=%d MB",
-		finalStats.MemoryLimit/(1024*1024),
-		finalStats.HeapGoal/(1024*1024),
-		finalStats.HeapLive/(1024*1024),
-		finalStats.MappedReady/(1024*1024),
-		finalStats.TotalAlloc/(1024*1024),
-		finalStats.TotalFree/(1024*1024))
+	log.Printf("Final RTML stats:")
+	log.Printf("  MemoryLimit: %d MB", finalStats.MemoryLimit/(1024*1024))
+	log.Printf("  HeapGoal: %d MB", finalStats.HeapGoal/(1024*1024))
+	log.Printf("  HeapLive: %d MB", finalStats.HeapLive/(1024*1024))
+	log.Printf("  MappedReady: %d MB", finalStats.MappedReady/(1024*1024))
+	log.Printf("  TotalAlloc: %d MB", finalStats.TotalAlloc/(1024*1024))
+	log.Printf("  TotalFree: %d MB", finalStats.TotalFree/(1024*1024))
 
-	// Sanity checks
+	// Sanity checks with detailed error messages
 	log.Println("Performing sanity checks...")
 
 	// Check that MemoryLimit is not zero
 	if finalStats.MemoryLimit == 0 {
-		log.Printf("❌ FAIL: MemoryLimit is zero")
+		log.Printf("❌ FAIL: MemoryLimit is zero - RTML is not properly detecting memory limits")
+		log.Printf("   This could indicate:")
+		log.Printf("   - Container memory limits not set properly")
+		log.Printf("   - RTML not properly initialized")
+		log.Printf("   - Running outside of a containerized environment")
 		os.Exit(1)
 	}
 	log.Printf("✅ MemoryLimit is valid: %d MB", finalStats.MemoryLimit/(1024*1024))
 
 	// Check that HeapGoal is not zero
 	if finalStats.HeapGoal == 0 {
-		log.Printf("❌ FAIL: HeapGoal is zero")
+		log.Printf("❌ FAIL: HeapGoal is zero - RTML is not calculating heap goals properly")
+		log.Printf("   This could indicate:")
+		log.Printf("   - RTML initialization failure")
+		log.Printf("   - Memory limit detection issues")
 		os.Exit(1)
 	}
 	log.Printf("✅ HeapGoal is valid: %d MB", finalStats.HeapGoal/(1024*1024))
 
 	// Check that HeapLive increased after allocation
 	if finalStats.HeapLive <= initialStats.HeapLive {
-		log.Printf("❌ FAIL: HeapLive did not increase. Initial: %d MB, Final: %d MB",
-			initialStats.HeapLive/(1024*1024), finalStats.HeapLive/(1024*1024))
+		log.Printf("❌ FAIL: HeapLive did not increase after allocation")
+		log.Printf("   Initial: %d MB", initialStats.HeapLive/(1024*1024))
+		log.Printf("   Final: %d MB", finalStats.HeapLive/(1024*1024))
+		log.Printf("   This could indicate:")
+		log.Printf("   - Memory allocation not working properly")
+		log.Printf("   - Garbage collection removing allocated memory")
+		log.Printf("   - RTML stats not reflecting actual memory usage")
 		os.Exit(1)
 	}
 	log.Printf("✅ HeapLive increased: %d MB -> %d MB",
@@ -217,15 +255,23 @@ func runSanityCheckTest(test SanityTest) {
 
 	// Check that MappedReady is not zero
 	if finalStats.MappedReady == 0 {
-		log.Printf("❌ FAIL: MappedReady is zero")
+		log.Printf("❌ FAIL: MappedReady is zero - No memory pages are mapped and ready")
+		log.Printf("   This could indicate:")
+		log.Printf("   - Memory mapping issues")
+		log.Printf("   - Container memory restrictions")
+		log.Printf("   - RTML not properly tracking mapped memory")
 		os.Exit(1)
 	}
 	log.Printf("✅ MappedReady is valid: %d MB", finalStats.MappedReady/(1024*1024))
 
 	// Check that TotalAlloc increased
 	if finalStats.TotalAlloc <= initialStats.TotalAlloc {
-		log.Printf("❌ FAIL: TotalAlloc did not increase. Initial: %d MB, Final: %d MB",
-			initialStats.TotalAlloc/(1024*1024), finalStats.TotalAlloc/(1024*1024))
+		log.Printf("❌ FAIL: TotalAlloc did not increase")
+		log.Printf("   Initial: %d MB", initialStats.TotalAlloc/(1024*1024))
+		log.Printf("   Final: %d MB", finalStats.TotalAlloc/(1024*1024))
+		log.Printf("   This could indicate:")
+		log.Printf("   - Memory allocation not being tracked")
+		log.Printf("   - RTML stats reset during test")
 		os.Exit(1)
 	}
 	log.Printf("✅ TotalAlloc increased: %d MB -> %d MB",
@@ -235,13 +281,23 @@ func runSanityCheckTest(test SanityTest) {
 	expectedMinHeapLive := uint64(test.allocSizeMB) * 1024 * 1024 * 9 / 10  // 90% of allocated
 	expectedMaxHeapLive := uint64(test.allocSizeMB) * 1024 * 1024 * 12 / 10 // 120% of allocated
 	if finalStats.HeapLive < expectedMinHeapLive {
-		log.Printf("❌ FAIL: HeapLive too low. Expected at least %d MB, got %d MB",
-			expectedMinHeapLive/(1024*1024), finalStats.HeapLive/(1024*1024))
+		log.Printf("❌ FAIL: HeapLive too low")
+		log.Printf("   Expected at least: %d MB", expectedMinHeapLive/(1024*1024))
+		log.Printf("   Got: %d MB", finalStats.HeapLive/(1024*1024))
+		log.Printf("   This could indicate:")
+		log.Printf("   - Memory not properly committed to RSS")
+		log.Printf("   - Garbage collection removing memory")
+		log.Printf("   - Memory allocation not working as expected")
 		os.Exit(1)
 	}
 	if finalStats.HeapLive > expectedMaxHeapLive {
-		log.Printf("❌ FAIL: HeapLive too high. Expected at most %d MB, got %d MB",
-			expectedMaxHeapLive/(1024*1024), finalStats.HeapLive/(1024*1024))
+		log.Printf("❌ FAIL: HeapLive too high")
+		log.Printf("   Expected at most: %d MB", expectedMaxHeapLive/(1024*1024))
+		log.Printf("   Got: %d MB", finalStats.HeapLive/(1024*1024))
+		log.Printf("   This could indicate:")
+		log.Printf("   - Memory fragmentation")
+		log.Printf("   - Excessive memory overhead")
+		log.Printf("   - Memory leak or inefficient allocation")
 		os.Exit(1)
 	}
 	log.Printf("✅ HeapLive is reasonable: %d MB (allocated %d MB, expected %d-%d MB)",
@@ -252,13 +308,23 @@ func runSanityCheckTest(test SanityTest) {
 	expectedMinMappedReady := finalStats.HeapLive + 2*1024*1024  // HeapLive + 2MB overhead
 	expectedMaxMappedReady := finalStats.HeapLive + 10*1024*1024 // HeapLive + 10MB max overhead
 	if finalStats.MappedReady < expectedMinMappedReady {
-		log.Printf("❌ FAIL: MappedReady too low. Expected at least %d MB, got %d MB",
-			expectedMinMappedReady/(1024*1024), finalStats.MappedReady/(1024*1024))
+		log.Printf("❌ FAIL: MappedReady too low")
+		log.Printf("   Expected at least: %d MB", expectedMinMappedReady/(1024*1024))
+		log.Printf("   Got: %d MB", finalStats.MappedReady/(1024*1024))
+		log.Printf("   HeapLive: %d MB", finalStats.HeapLive/(1024*1024))
+		log.Printf("   This could indicate:")
+		log.Printf("   - Memory mapping issues")
+		log.Printf("   - Container memory restrictions")
 		os.Exit(1)
 	}
 	if finalStats.MappedReady > expectedMaxMappedReady {
-		log.Printf("❌ FAIL: MappedReady too high. Expected at most %d MB, got %d MB",
-			expectedMaxMappedReady/(1024*1024), finalStats.MappedReady/(1024*1024))
+		log.Printf("❌ FAIL: MappedReady too high")
+		log.Printf("   Expected at most: %d MB", expectedMaxMappedReady/(1024*1024))
+		log.Printf("   Got: %d MB", finalStats.MappedReady/(1024*1024))
+		log.Printf("   HeapLive: %d MB", finalStats.HeapLive/(1024*1024))
+		log.Printf("   This could indicate:")
+		log.Printf("   - Excessive memory mapping overhead")
+		log.Printf("   - Memory fragmentation")
 		os.Exit(1)
 	}
 	log.Printf("✅ MappedReady is reasonable: %d MB (HeapLive: %d MB, expected %d-%d MB)",
@@ -269,13 +335,23 @@ func runSanityCheckTest(test SanityTest) {
 	expectedMinHeapGoal := finalStats.HeapLive                // HeapGoal should be at least HeapLive
 	expectedMaxHeapGoal := finalStats.HeapLive + 60*1024*1024 // HeapLive + 60MB max growth allowance
 	if finalStats.HeapGoal < expectedMinHeapGoal {
-		log.Printf("❌ FAIL: HeapGoal too low. Expected at least %d MB, got %d MB",
-			expectedMinHeapGoal/(1024*1024), finalStats.HeapGoal/(1024*1024))
+		log.Printf("❌ FAIL: HeapGoal too low")
+		log.Printf("   Expected at least: %d MB", expectedMinHeapGoal/(1024*1024))
+		log.Printf("   Got: %d MB", finalStats.HeapGoal/(1024*1024))
+		log.Printf("   HeapLive: %d MB", finalStats.HeapLive/(1024*1024))
+		log.Printf("   This could indicate:")
+		log.Printf("   - RTML heap goal calculation error")
+		log.Printf("   - Memory limit detection issues")
 		os.Exit(1)
 	}
 	if finalStats.HeapGoal > expectedMaxHeapGoal {
-		log.Printf("❌ FAIL: HeapGoal too high. Expected at most %d MB, got %d MB",
-			expectedMaxHeapGoal/(1024*1024), finalStats.HeapGoal/(1024*1024))
+		log.Printf("❌ FAIL: HeapGoal too high")
+		log.Printf("   Expected at most: %d MB", expectedMaxHeapGoal/(1024*1024))
+		log.Printf("   Got: %d MB", finalStats.HeapGoal/(1024*1024))
+		log.Printf("   HeapLive: %d MB", finalStats.HeapLive/(1024*1024))
+		log.Printf("   This could indicate:")
+		log.Printf("   - Excessive heap growth allowance")
+		log.Printf("   - RTML configuration issues")
 		os.Exit(1)
 	}
 	log.Printf("✅ HeapGoal is reasonable: %d MB (HeapLive: %d MB, expected %d-%d MB)",
@@ -286,13 +362,21 @@ func runSanityCheckTest(test SanityTest) {
 	expectedMinTotalAlloc := uint64(test.allocSizeMB) * 1024 * 1024 * 9 / 10  // 90% of allocated
 	expectedMaxTotalAlloc := uint64(test.allocSizeMB) * 1024 * 1024 * 12 / 10 // 120% of allocated
 	if finalStats.TotalAlloc < expectedMinTotalAlloc {
-		log.Printf("❌ FAIL: TotalAlloc too low. Expected at least %d MB, got %d MB",
-			expectedMinTotalAlloc/(1024*1024), finalStats.TotalAlloc/(1024*1024))
+		log.Printf("❌ FAIL: TotalAlloc too low")
+		log.Printf("   Expected at least: %d MB", expectedMinTotalAlloc/(1024*1024))
+		log.Printf("   Got: %d MB", finalStats.TotalAlloc/(1024*1024))
+		log.Printf("   This could indicate:")
+		log.Printf("   - Memory allocation not being tracked properly")
+		log.Printf("   - RTML stats reset during test")
 		os.Exit(1)
 	}
 	if finalStats.TotalAlloc > expectedMaxTotalAlloc {
-		log.Printf("❌ FAIL: TotalAlloc too high. Expected at most %d MB, got %d MB",
-			expectedMaxTotalAlloc/(1024*1024), finalStats.TotalAlloc/(1024*1024))
+		log.Printf("❌ FAIL: TotalAlloc too high")
+		log.Printf("   Expected at most: %d MB", expectedMaxTotalAlloc/(1024*1024))
+		log.Printf("   Got: %d MB", finalStats.TotalAlloc/(1024*1024))
+		log.Printf("   This could indicate:")
+		log.Printf("   - Memory allocation overhead")
+		log.Printf("   - Memory fragmentation")
 		os.Exit(1)
 	}
 	log.Printf("✅ TotalAlloc is reasonable: %d MB (allocated %d MB, expected %d-%d MB)",
@@ -302,8 +386,12 @@ func runSanityCheckTest(test SanityTest) {
 	// Check that TotalFree is reasonable (should be 0 or very small for our test)
 	expectedMaxTotalFree := uint64(5) * 1024 * 1024 // 5MB max
 	if finalStats.TotalFree > expectedMaxTotalFree {
-		log.Printf("❌ FAIL: TotalFree too high. Expected at most %d MB, got %d MB",
-			expectedMaxTotalFree/(1024*1024), finalStats.TotalFree/(1024*1024))
+		log.Printf("❌ FAIL: TotalFree too high")
+		log.Printf("   Expected at most: %d MB", expectedMaxTotalFree/(1024*1024))
+		log.Printf("   Got: %d MB", finalStats.TotalFree/(1024*1024))
+		log.Printf("   This could indicate:")
+		log.Printf("   - Memory not being properly utilized")
+		log.Printf("   - Garbage collection issues")
 		os.Exit(1)
 	}
 	log.Printf("✅ TotalFree is reasonable: %d MB", finalStats.TotalFree/(1024*1024))
