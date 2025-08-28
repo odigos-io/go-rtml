@@ -22,7 +22,7 @@ var globalChunks [][]byte
 func main() {
 	// Set up logging with timestamps
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	
+
 	// Parse environment variables
 	test := SanityTest{
 		allocSizeMB: getEnvAsIntOrDefault("ALLOC_SIZE_MB", 50),
@@ -33,7 +33,7 @@ func main() {
 	log.Printf("Allocation size: %d MB", test.allocSizeMB)
 	log.Printf("Available CPUs: %d", runtime.NumCPU())
 	log.Printf("Initial memory stats:")
-	
+
 	// Log initial memory stats
 	var initialMemStats runtime.MemStats
 	runtime.ReadMemStats(&initialMemStats)
@@ -46,7 +46,7 @@ func main() {
 	startTime := time.Now()
 	runSanityCheckTest(test)
 	duration := time.Since(startTime)
-	
+
 	log.Printf("=== Test completed successfully in %v ===", duration)
 }
 

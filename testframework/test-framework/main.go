@@ -70,6 +70,8 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 	}
 
 	log.Printf("Starting test: %s", config.Name)
+	log.Printf("Container config: Image=%s, MemoryLimit=%s, Timeout=%ds",
+		config.Image, config.MemoryLimit, config.TimeoutSeconds)
 
 	// Create container config
 	containerConfig := &container.Config{
@@ -80,7 +82,7 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 
 	// Create host config with memory limit
 	hostConfig := &container.HostConfig{
-		AutoRemove: true,
+		AutoRemove: false, // Disable auto-remove to prevent race condition
 		Resources: container.Resources{
 			Memory: tr.parseMemoryLimit(config.MemoryLimit),
 		},
@@ -98,9 +100,12 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 	}
 
 	containerID := resp.ID
+	log.Printf("Container created successfully: %s", containerID[:12])
 	defer func() {
-		// Clean up container if it's still running
-		tr.dockerClient.ContainerRemove(ctx, containerID, types.ContainerRemoveOptions{Force: true})
+		// Always clean up container manually since AutoRemove is disabled
+		if err := tr.dockerClient.ContainerRemove(ctx, containerID, types.ContainerRemoveOptions{Force: true}); err != nil {
+			log.Printf("Warning: failed to remove container %s: %v", containerID, err)
+		}
 	}()
 
 	// Start container
@@ -112,6 +117,28 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 		result.FailureDetails.ActualValue = err.Error()
 		return result
 	}
+
+	// Verify container is running
+	if containerInfo, err := tr.dockerClient.ContainerInspect(ctx, containerID); err != nil {
+		result.Status = "failed"
+		result.Error = fmt.Sprintf("failed to inspect container after start: %v", err)
+		result.EndTime = time.Now()
+		result.FailureDetails.Reason = "Container inspection failed"
+		result.FailureDetails.ActualValue = err.Error()
+		return result
+	} else if containerInfo.State == nil || !containerInfo.State.Running {
+		result.Status = "failed"
+		result.Error = fmt.Sprintf("container is not running after start, state: %+v", containerInfo.State)
+		result.EndTime = time.Now()
+		result.FailureDetails.Reason = "Container not running after start"
+		result.FailureDetails.ActualValue = fmt.Sprintf("State: %+v", containerInfo.State)
+		return result
+	}
+
+	log.Printf("Container started successfully and is running")
+
+	// Give container a moment to start up properly
+	time.Sleep(100 * time.Millisecond)
 
 	// Start collecting memory stats in background
 	statsCtx, statsCancel := context.WithCancel(ctx)
@@ -180,6 +207,7 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	log.Printf("Waiting for container %s to finish (timeout: %v)...", containerID[:12], timeout)
 	waitCh, errCh := tr.dockerClient.ContainerWait(waitCtx, containerID, container.WaitConditionNotRunning)
 
 	select {
@@ -236,6 +264,17 @@ func (tr *TestRunner) RunTest(ctx context.Context, config TestConfig) TestResult
 		result.EndTime = time.Now()
 		result.FailureDetails.Reason = "Container wait failed"
 		result.FailureDetails.ActualValue = err.Error()
+
+		// Try to get container info to understand what happened
+		if containerInfo, infoErr := tr.dockerClient.ContainerInspect(ctx, containerID); infoErr == nil {
+			log.Printf("Container state: %+v", containerInfo.State)
+			if containerInfo.State != nil {
+				result.FailureDetails.LogSnippet = fmt.Sprintf("Container state: %s, Exit code: %d",
+					containerInfo.State.Status, containerInfo.State.ExitCode)
+			}
+		} else {
+			log.Printf("Failed to inspect container: %v", infoErr)
+		}
 
 	case <-waitCtx.Done():
 		result.Status = "timeout"
