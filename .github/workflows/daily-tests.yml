@@ -15,10 +15,10 @@ jobs:
       - name: Get Go versions
         id: get-versions
         run: |
-          # Get all Go versions 1.23 and above
+          # Get all Go versions 1.22 and above
           versions=$(curl -s "https://go.dev/dl/?mode=json&include=all" \
             | jq -r '.[] | select(.stable == true) | .version' \
-            | grep -E '^go1\.(2[3-9]|[3-9][0-9])' \
+            | grep -E '^go1\.(2[2-9]|[3-9][0-9])' \
             | sed 's/^go//' \
             | jq -R -s -c 'split("\n")[:-1]')
           echo "versions=$versions" >> $GITHUB_OUTPUT
