@@ -1,6 +1,6 @@
 # go-rtml
 
-golang real time memory limiter to guard against OOM in go code.
+golang real time memory limiter - check for memory pressure in real time to drop or reject (back-pressure) new work items before your go application terminates with OutOfMemory (OOM).
 
 This package is all about the STABILITY of your go application under memory pressure.
 
@@ -8,18 +8,20 @@ This package is all about the STABILITY of your go application under memory pres
 
 Your golang applications need memory (RAM) to run. In an utopic world, you would have infinite memory and never need to think or worry about how much memory resources are consumed. In the real world, memory is a limited resource which has to be managed carefully.
 
-When your process is under memory pressure for any reason, you - the application developer, is responsible to react be applying back-pressure and avoid processing new work items which can increase the memory pressure and lead to OutOfMemory brutal termination of the process.
+When your process is under memory pressure for any reason, you - the application developer, is responsible to avoid processing new work items which can increase the memory pressure more and lead to OutOfMemory brutal termination of the process.
 
 ## How it works
 
-- Call `rtml.IsMemLimitReached()` in the entry points to your application
-- Do it where you have the ability to reject, drop, or apply back-pressure to your senders.
+- Make sure you set `GOMEMLIMIT` environment variable in alignment to your container memory limit.
+- Call `rtml.IsMemLimitReached()` in the entry points to your application, (or on checkpoint before doing some potentially expensive allocations).
+- Do it where you have the ability to reject, drop, or apply back-pressure your senders.
 - Prefer to call it as soon as possible, before any expensive allocations are made.
 
 This simple function will tell you if the memory limit is reached and allow you to react, for example: 
-- apply back-pressure to the sender by rejecting the work item. it is expected to be retried after some time (where hopefully, memory pressure has already reduced to normal levels).
-- drop the work item if the system cannot handle it under the current memory pressure.
-- notify some monitoring system about this event for further investigation or automatic scaling.
+
+- apply back-pressure to the sender by rejecting the work item. they are expected to retry after some time, at which point hopefully, memory pressure has already reduced to normal levels.
+- drop the work item if the sender is not able to retry it safely.
+- notify some monitoring system about this event for further investigation or initiazte automatic scaling.
 
 ## Usage
 
@@ -42,40 +44,25 @@ func requestHandler() {
 
 and build your application with the following ldflag: "-checklinkname=0".
 
-## Testing
-
-This project includes a comprehensive test framework that runs tests in isolated containers to verify memory limit behavior. The test framework is located in the `testframework/` directory as a separate Go module.
-
-### Quick Test Run
-
-```bash
-# Navigate to test framework directory
-cd testframework
-
-# Run the complete test suite
-./scripts/run-tests.sh
-
-# Or use make
-make docker-run-tests
-```
-
-### Test Types
-
-- **Memory Allocation Tests**: Verify basic memory allocation within limits
-- **Memory Limit Tests**: Ensure memory limits are properly enforced
-- **Stress Tests**: Test memory management under sustained load
-
-For detailed documentation, see [testframework/README.md](testframework/README.md).
-
 ## About ldflags="-checklinkname=0"
 
 This package uses `go:linkname` to access the internal state of the go runtime.
 
-This is considered bad practice and not recommended by the go team, thus the ldflag to warn you.
+This is [considered bad practice and not recommended by the go team](https://github.com/golang/go/issues/67401), thus the ldflag to warn you.
 
 Having said that, it does address a hard to solve real-world problem, in a way that satisfies tight performance requirements and acurate reaction to memory pressure.
 
 Be aware that this practice, while working, can break unexpectedly by internal changes to the go runtime implementation without notice. Test your application with every new go version, weight the benefits, risks and alternatives, and evaluate if this risk is acceptable for you.
+
+We run daily tests for all version of go above 1.23 to ensure that the package is compatible and stable.
+
+## Frequency
+
+Calling `rtml.IsMemLimitReached()` is considered "cheap", since it is doing the same work as go runtime does once every few KBs of heap allocations.
+
+It is ok to call it one every request, but keep in mind that it still need to synchronizly access few atomic variables and do some computations, so it's not free. Prefer calling it on batches if possible and not on every item if there are many of them.
+
+Test your application under load to exaimne it's performance.
 
 ## What is Memory Limit?
 
@@ -104,38 +91,84 @@ Why it is so important to not crash the application due to OOM?
 
 For these reasons, we aim to never crash the application due to OOM. Easier said than done :/
 
-## Memory Managment in Go
+## How Check the Limit in Real-Time Works?
 
-### CGroup Memory Limit
 
-CGroup is a linux kernel feature that allows to limit the resources (memory, cpu, etc) that a group of processes can consume. When you run a container, usually all the processes inside this container are part of the same cgroup and all share the same memory limit.
+### Container Level Memory Limit
 
-A memory limit for the cgroup (container) is a number you can or cannot control, which is a hard limit - once crossed, processes in the container will be terminated and stabilty will be degraded.
+Container level memory limit are usually enforced in the operating system, on a cgroup (or in containerized environments, for all processes in the container).
 
-Go applications are commonly run in containers, and as a single process, thus we will assume for the rest of this document that the memory limit is set on the container level to some predefined value and there is a single go process running in the container.
+For simplicity, and since go usually runs as a single process (with multiple OS threads), we will assume that our process is the only one in the container, thus it should apply to the set limits as well.
 
-Our goal (in terms of the CGroup memory limit) is to never let the go process consume more operating system memory than the container memory limit.
+### GOMEMLIMIT
 
-### Operating System Memeory
+GOMEMLIMIT is a way to reflect the container memory limit to the go runtime and allow it to call the garbage collector in a way to trys to avoid crossing the runtime limit. It is usually set to a value that is a bit lower from the container memory limit to give some headroom for spikes, inacuracies and garbage collection reaction time. 
 
-Under the hood, go is just a normal process running on the operating system. When it needs memory (for the heap, stack, large objects, etc), or want to release some memory acuired before, it calls the operating system api (via syscalls) to "map" this memory, which is considered an expensive call.
+You can, for example, set GOMEMLIMIT to 80% of the container memory limit, which for 1GB container limit, will leave you with 800MB for normal usage, and 200MB for spikes and safe margins.
 
-The operating system itself only manages memory in chunks called "pages" (typically 4KB in size). Go will try to minimize the number of these calls, and manage memory from the operating system (both allocations and releases) in large chunks so they are ready for future use.
+This number is somehow arbitrary and encapsulates a trade-off between stability and costs (memory usage).
 
-For the memory accounting to towards the cgroup memory limit, only "resident set" memory is considered. Resident set memory is the memory that is currently being used by the process. When a page is mapped, it does not count in the resident set and thus does not contribute to the memory accounting. only once the application first "writes" to this page, it will be counted as resident set memory and bring the process closer to the limit (at least in linux).
+### Resident Set Memory and "Ready" Memory
 
-This memory is not automatically released from the resident set and impact how much we are close to the limit. go runtime needs to explicitly notify the operating system that the memory is now unused (costly operation).
+The memory that is counted towards the container (cgroup) memory limit is called "resident set" memory, which is kernel memory pages which are backed by physical memory. This is the number the kernel will use to account and trigger OutOfMemory terminations.
 
-### Appliction Runtime Memory
+Go runtime on it's side, tracks the number of pages it considers as "Ready". A memory page is ready if the runtime can use it to make allocations. A ready page is usually backed by physical memory and contributes to the resident set memory, but not always (the operating system is quite efficient in delaying the physical memory allocation until it is really needed).
 
-In your go code, you usually allocate memory by using `make`, creating new objects, manipulating strings and slices, etc.
+Therefore: `ResidentSet` (kernel) <= `MappedReady` (go runtime)
 
-These are very frequent, thus it is highly optimized to be fast and cheap, avoiding "expensive" work on the hot path. Go runtime will pre-allocate a "span" of memory which is ready to host a bulk of objects. most allocations are made from this "span" real quick, and when the span is full, a new one is aquired.
+So the first check we do is:
 
-### Garbage Collection
+```
+if MappedReady < GOMEMLIMIT {
+    return false // memory limit not reached
+}
+```
 
-Go garbage collector will take care of calling the 
+If the ready memory is less then the limit, then for sure the resident set memory is also below the limit and limit is not reached.
 
-- real-time memory accounting
-- configuration from user (`GOGC` and `GOMEMLIMIT`)
-- 
+This check alone is sufficient to capture most applications in normal unloaded state and provide a cheap and fast return path almost always.
+
+### HeapFree
+
+When go runtime needs to allocate new kernel memory for it's heap, or when memory is no longer used and can be freed, it calls the operating system api to do so. This call is using a syscall and considered expensive.
+
+After grabage collection, when the runtime is left with unused memory, it will mark it as "free" and will not imidiatly return it to the operating system. "free" memory is still counted as "Ready" in the runtime, and considered part of the resident set memory for the container memory limit.
+
+This memory can be reused for new allocations, but is counted in the HeapReady count, thus we will ignore it for the computation, just like the go garbage collector does when it calculates the heap goal.
+
+```
+if (MappedReady - HeapFree) < GOMEMLIMIT {
+    return false // memory limit not reached
+}
+```
+
+This check will signal that there is still memory available for allocations if the HeapFree is high enough.
+
+### HeapGoal
+
+The final check is where things get interesting. Go runtime will honor the GOMEMLIMIT environment variable and will try to keep the heap size below it by triggering garbage collection. 
+
+In the good scenario, the memory usages grows and garbage collection is triggered right near the GOMEMLIMIT. After garbage collection, there is now a lot of free memory, to use for future allocations.
+
+In the bad scenario, your program is still holding references to this memory and after running garbage collection, the consumed memory is still above the GOMEMLIMIT.
+
+Quoting from the go runtime source code comments:
+
+> There's honestly not much we can do here but just trigger GCs continuously
+> and let the CPU limiter reign that in. Something has to give at this point.
+
+This is where it's most critical to reject any new allocations and not add up new allocations to the heap when we are already above the GOMEMLIMIT.
+
+The way we check it is - by doing exactly what go runtime is doing. We calculate the heap goal and compare it with heap live.
+
+```
+if HeapLive < HeapGoal {
+    return false // memory limit not reached
+}
+```
+
+This check signals that go GC controller has not got to a point where collection is required, thus new allocations are safe at this point.
+
+Otherwise, If both HeapReady is above the GOMEMLIMIT, HeapFree does not help, and the allocations counts indicate garbage collection cannot go below the goal, then we know that the memory limit is reached.
+
+
