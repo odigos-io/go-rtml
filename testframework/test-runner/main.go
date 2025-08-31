@@ -25,7 +25,7 @@ func main() {
 
 	// Parse environment variables
 	test := SanityTest{
-		allocSizeMB: getEnvAsIntOrDefault("ALLOC_SIZE_MB", 50),
+		allocSizeMB: uint64(getEnvAsIntOrDefault("ALLOC_SIZE_MB", 50)),
 	}
 
 	log.Printf("=== Starting sanity check test ===")
@@ -154,16 +154,6 @@ func runSanityCheckTest(test SanityTest) {
 				bytesToMB(stats.HeapLive),
 				bytesToMB(stats.MappedReady))
 		}
-
-		// Force garbage collection more frequently
-		if i%2 == 0 {
-			// Force GC and read memory stats to ensure RSS commitment
-			runtime.GC()
-			var m runtime.MemStats
-			runtime.ReadMemStats(&m)
-			log.Printf("GC triggered: HeapAlloc=%d MB, HeapSys=%d MB",
-				bytesToMB(m.HeapAlloc), bytesToMB(m.HeapSys))
-		}
 	}
 
 	allocationDuration := time.Since(allocationStart)
@@ -185,9 +175,6 @@ func runSanityCheckTest(test SanityTest) {
 
 	// Force physical memory commit by touching all bytes
 	forceMemoryCommit(globalChunks)
-
-	// Force final GC and dump runtime memory stats
-	runtime.GC()
 
 	// Make some computation that touches all of the global chunks to make sure they are not optimized away
 	foo := 0

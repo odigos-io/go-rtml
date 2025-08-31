@@ -5,6 +5,7 @@ on:
     # Run at 2:00 AM UTC every day
     - cron: '0 2 * * *'
   workflow_dispatch: # Allow manual triggering
+  pull_request:
 
 jobs:
   get-go-versions:
