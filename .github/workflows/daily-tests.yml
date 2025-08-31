@@ -1,4 +1,4 @@
-name: Daily Tests
+name: Tests
 
 on:
   schedule:
