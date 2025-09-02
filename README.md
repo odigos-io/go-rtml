@@ -1,20 +1,18 @@
 # go-rtml
 
-- **Shortened** - Go Real Time Memory Limiter.
+- **Shortened For** - Go Real Time Memory Limiter.
 - **Goal** - Memory STABILITY - avoid OutOfMemory (OOM) brutal termination of your go application.
-- **Mechanism** - a function you can call in your code, before handling any new work items. based on a boolean response, you should either accept or reject before making expensive allocations.
-- **Performant** - cheap to call so you can check in real time and per incoming request instead of using inacurate heuristic sampling and expensive "stop the world" (ReadMemStats) alternatives.
-- **Accurate** - use the exact same values as the go runtime, to align perfectly with it's algorithm and state.
+- **Mechanism** - a function you can call in your code, before handling any new work items. based on a the function's boolean response, you should eigher accept or reject the work.
+- **Performant** - cheap to call so you can check every request in real time, instead of using inacurate heuristic sampling and expensive "stop the world" (ReadMemStats) alternatives.
+- **Accurate** - uses the exact same computation as the runtime garbage collector.
 
 ## Motivation
 
-Your golang applications need memory (RAM) to run. In an utopic world, you would have infinite memory and never need to think or worry about how much memory resources are consumed. In the real world, memory is a limited resource which has to be managed carefully.
-
-When your process is under memory pressure for any reason, you - the application developer, is responsible to avoid processing new work items which can increase the memory more and lead to OutOfMemory brutal termination of the process. 
+Your golang applications need memory (RAM) to run. In an utopic world, you would have infinite memory and never need to think or worry about how much resources are consumed. In the real world, memory is a limited resource which has to be managed carefully, otherwise, stability can be compromised. Managing memory is the responsibility of the operating system, the go runtime, and you - the application developer.
 
 How to do that in a safe and performant way you ask? introducing 🎉 `go-rtml` 🎉
 
-At [Odigos](https://odigos.io), we deploy a pipeline for collecting and processing high volumes of logs, metrics and traces, using OpenTelemetry Collectors. Our stability journey has been long and challenging, leading us deep into some interesting rabbit holes in the go runtime. This module is our state-of-the-art solution to avoid OutOfMemory which is the result of long research and has proven results in production systems.
+At [Odigos](https://odigos.io), we deploy a pipeline for collecting and processing high volumes of logs, metrics and traces, using OpenTelemetry Collectors. Our stability journey has been long and challenging, leading us into some deep rabbit holes inside the go runtime. This module is our state-of-the-art solution for avoiding crashing our collectors due to OutOfMemory. It is battle tested with proven results in production systems.
 
 ## How it works
 
